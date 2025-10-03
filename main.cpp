@@ -14,12 +14,16 @@
 #include <random>
 #include <thread>
 #include <mutex>
+#include <set>
+#include <random>
 
 using namespace std;
 
 struct fdata {
     vector<string> gnames;
     vector<double> vec_x, vec_y;
+    int sep_point;
+    double min_jindex;
     vector<int> rank_x, rank_y, rank_diff;
     vector<double> weight_x, weight_y, weights;
     vector<double> rank_m;
@@ -28,6 +32,7 @@ struct fdata {
 
 struct fstat {
     string tf_name;
+    vector<string> gnames;
     int count_n;
     double logpp;
     char set_dir;
@@ -43,8 +48,6 @@ struct fstat {
     bool operator < (const fstat & r) const
     { return pvalue < r.pvalue; }
 };
-
-int distribution_bn = 50;
 
 int sgn(int x);
 void bubble_asort(vector<int> &nums, vector<int> &order);
@@ -66,18 +69,20 @@ void trim_string(string &src);
 vector<string> str_split(string& src, string delimit);
 double tau_pvalue(double estimate);
 double tau0(vector<int>& rank_x, vector<int>& rank_y);
-double wtau2(vector<int> &rank_x, vector<int> &rank_y, vector<double> &weights);
+double wtau2(vector<int> &rank_x, vector<int> &rank_y, vector<double> &weights, int &min_rank);
 void read_grit_dataset_bed(string grit_file_bed);
+void build_gene_pool();
 void grit_set_abs();
 void grit_set_rev();
 void read_rank_data(string rank_file);
+void rf_gene_list();
 void grit_list_abs();
 void grit_list_rev();
-void overlap_set(map<string, double> &map_x, map<string, double> &map_y, vector<string> &gnames, vector<double> &vec_x, vector<double> &vec_y);
+void overlap_set(map<string, double> &map_x, map<string, double> &map_y, vector<string> &gnames, vector<double> &vec_x, vector<double> &vec_y, int &sep_point, double &min_jindex_rt, mt19937 &generator, uniform_real_distribution<double> &puf_distribution);
 void one_tau_analysis(vector<double> &vec_x, vector<double> &vec_y, double &logp, double &tau, double &estimate, double &pvalue, char &cor_dir, fdata &data_tmp);
 void performe_threading();
 void performe_wrktf_analysis(vector<string> *index_sect);
-void performe_wrktf_analysis_auto_p(vector<string> *index_sect);
+//void performe_wrktf_analysis_auto_p(vector<string> *index_sect);
 bool stat_less_p(struct fstat a, struct fstat b);
 bool stat_less_fdr(struct fstat a, struct fstat b);
 void mcf_die(const std::string &message);
@@ -90,9 +95,12 @@ void cal_weights(vector<double> &vec_data, double &pp, vector<double> &weights);
 void cal_dweights(vector<double> &vec_data, int bn, vector<double> &weights);
 //void cal_dweights_kde(vector<double> &vec_data, vector<double> &weights);
 void cal_pdf(vector<double>& data_vec, vector<double>& weights);
+void cal_rpdf(vector<double>& data_vec, vector<double>& weights);
 double box_pdf(double x, double m, double s);
 double default_bandwidth(vector<double>& data_vec);
 void cal_weights_ori(vector<double> &vec_data, vector<double> &weights);
+void cal_weights_ori_sep(vector<double> &vec_data, vector<double> &weights, int &sep_point);
+void qtnorm_weights(vector<double> &weight_x, vector<double> &weight_y);
 double weigher(double x1, double pp);
 double calculate_limit(vector<double> &weights);
 void abs_vec(vector<double> &vec_data, vector<double> &abs_data);
@@ -100,6 +108,7 @@ void merge_weights(vector<double> &weight_x, vector<double> &weight_y, vector<do
 void merge_ranks(vector<int> &rank_x, vector<int> &rank_y, vector<double> &ranks);
 void print_datas(vector<double> &vec_x, vector<double> &vec_y, vector<int> &rank_x, vector<int> &rank_y, vector<double> &weight_x, vector<double> &weight_y, vector<double> &weights);
 double normalCDF(double x);
+string pack_string(vector<string> str_vec);
 
 char const short_options[] = "hs:i:g:l:r:w:pt:o:d:b:";
 struct option long_options[] =
@@ -115,7 +124,7 @@ struct option long_options[] =
             {"thread", 0, NULL, 't'},
             {"output", 0, NULL, 'o'},
             {"outdata", 0, NULL, 'd'},
-            {"bin", 0, NULL, 'b'},
+            {"rdm_seed", 0, NULL, 'b'},
             {0, 0, 0, 0}
         };
 
@@ -123,6 +132,7 @@ map<float, float> fpp_mp;
 map<string, map<string, double>> grit_set;
 vector<string> tf_names;
 map<string, double> rank_data;
+set<string> gene_pool;
 vector<struct fstat> result_stats;
 vector<fdata> result_datas;
 double tscore_set = 0.0;
@@ -134,8 +144,36 @@ mutex thread_lock;
 bool mute = true;
 bool dump = false;
 bool auto_p = false;
+int random_seed = 12345;
+//srand(time(0));
+//default_random_engine generator(random_seed);
+//uniform_real_distribution<double> puf_distribution(0.0, 1.0);
 
 int main(int argc, char *argv[]) {
+
+    /*
+    vector<int> arr = {5, 3, 8, 1, 2};
+    
+    cout << "before ";
+    for (int num : arr) {
+        cout << num << " ";
+    }
+    cout << endl;
+    
+    vector<int> order;
+    bubble_asort(arr, order);
+    
+    cout << "after: ";
+    for (int num : order) {
+        cout << arr[num] << " ";
+    }
+    cout << endl;
+    */
+
+    //exit(0);
+
+    //srand(time(0));
+    //srand(123456);
     //cout << normalCDF(1.64) << endl;
     //cout << normalCDF(-1.64) << endl;
     //permutation_test();
@@ -197,7 +235,8 @@ int main(int argc, char *argv[]) {
                 thread_n = atoi(optarg);
                 break;
             case 'b':
-                distribution_bn = atoi(optarg);
+                random_seed = atoi(optarg);
+                srand(random_seed);
                 break;
             case 'o':
                 output_file = optarg;
@@ -334,6 +373,38 @@ void cal_pdf(vector<double>& data_vec, vector<double>& weights) {
   } else {
     for (int x = 0; x < x_n; x++) {
         weights[x] = 1.0 - (weights[x] / bin_xmax);
+    }
+  }
+}
+
+void cal_rpdf(vector<double>& data_vec, vector<double>& weights) {
+  int x_n = data_vec.size();
+  double bandwidth = default_bandwidth(data_vec);
+  double data_max = vec_max(data_vec);
+  double data_min = vec_min(data_vec);
+  for(int i = 0; i < x_n; i++) {
+    double data_rg_min = data_min > data_vec[i] - 0.5*bandwidth ? data_min : data_vec[i] - 0.5*bandwidth;
+    double data_rg_max = data_max < data_vec[i] + 0.5*bandwidth ? data_max : data_vec[i] + 0.5*bandwidth;
+    double da = 0.0;
+    for(int j = 0; j < x_n; j++) {
+      da += box_pdf(data_vec[j], data_vec[i], bandwidth);
+    }
+    if (data_rg_max - data_rg_min == 0) {
+        weights.push_back(0.0);
+    } else {
+        weights.push_back(da / double(x_n) * bandwidth / (data_rg_max - data_rg_min));
+    }
+  }
+  double bin_xmax = vec_max(weights);
+  if (bin_xmax <= 0.0) {
+    //cout << "bin_xmax <= 0.0" << endl;
+    //exit(1);
+    for (int x = 0; x < x_n; x++) {
+        weights[x] = 1.0;
+    }
+  } else {
+    for (int x = 0; x < x_n; x++) {
+        weights[x] = weights[x] / bin_xmax;
     }
   }
 }
@@ -500,6 +571,59 @@ void cal_dweights(vector<double> &vec_data, int bn, vector<double> &weights) {
 }
 */
 
+void cal_weights_ori_sep(vector<double> &vec_data, vector<double> &weights, int &sep_point) {
+    //double pp = log(0.5) / log(logp);
+    weights.clear();
+    unsigned int x_n = vec_data.size();
+    if (x_n < 1) {
+        cout << "x_n < 1" << endl;
+        exit(1);
+        //return 0.0;
+    }
+    vector<double> vec_data_abs;
+    abs_vec(vec_data, vec_data_abs);
+    /*
+    vector<int> order;
+    bubble_asort_rev(vec_data_abs, order);
+    //double max_data1 = vec_max(vec_data_abs);
+    double max_data = vec_data_abs[order[round((x_n - 1) * 0.01)]];
+    //cout << max_data1 << ", " << max_data << endl;
+    double min_data = vec_min(vec_data_abs);
+    */
+    double max_data = vec_data_abs[0];
+    double min_data = vec_data_abs[0];
+    for (int i = 1; i < sep_point; i++) {
+        if (max_data < vec_data_abs[i]) {
+            max_data = vec_data_abs[i];
+        }
+        if (min_data > vec_data_abs[i]) {
+            min_data = vec_data_abs[i];
+        }
+    }
+    if (max_data <= 0.0) {
+        /*
+        cout << "max_data < 0.0" << endl;
+        exit(1);
+        //return 0.0;
+        */
+       for (int x = 0; x < sep_point; x++) {
+            weights.push_back(0.0);
+        }
+    } else {
+        for (int x = 0; x < sep_point; x++) {
+            if (vec_data_abs[x] > max_data) {
+                weights.push_back(1.0);
+            } else {
+                double tmp_wt = ((vec_data_abs[x] - min_data) / (max_data - min_data) / 2.0) + 0.5;
+                weights.push_back(tmp_wt);
+            }
+        }
+    }
+    for (int x = sep_point; x < x_n; x++) {
+        weights.push_back(0.25);
+    }
+}
+
 void cal_weights_ori(vector<double> &vec_data, vector<double> &weights) {
     //double pp = log(0.5) / log(logp);
     weights.clear();
@@ -513,21 +637,27 @@ void cal_weights_ori(vector<double> &vec_data, vector<double> &weights) {
     abs_vec(vec_data, vec_data_abs);
     vector<int> order;
     bubble_asort_rev(vec_data_abs, order);
-    //double max_data1 = vec_max(vec_data_abs);
-    double max_data = vec_data_abs[order[round((x_n - 1) * 0.01)]];
+    double max_data = vec_max(vec_data_abs);
+    //double max_data = vec_data_abs[order[round((x_n - 1) * 0.01)]];
     //cout << max_data1 << ", " << max_data << endl;
     double min_data = vec_min(vec_data_abs);
     if (max_data <= 0.0) {
+        /*
         cout << "max_data < 0.0" << endl;
         exit(1);
         //return 0.0;
-    }
-    for (int x = 0; x < x_n; x++) {
-        if (vec_data_abs[x] > max_data) {
-            weights.push_back(1.0);
-        } else {
-            double tmp_wt = (vec_data_abs[x] - min_data) / (max_data - min_data);
-            weights.push_back(tmp_wt);
+        */
+       for (int x = 0; x < x_n; x++) {
+            weights.push_back(0.0);
+        }
+    } else {
+        for (int x = 0; x < x_n; x++) {
+            if (vec_data_abs[x] > max_data || max_data - min_data == 0.0) {
+                weights.push_back(1.0);
+            } else {
+                double tmp_wt = (vec_data_abs[x] - min_data) / (max_data - min_data);
+                weights.push_back(tmp_wt);
+            }
         }
     }
 }
@@ -680,6 +810,19 @@ double calculate_limit(vector<double> &weights) {
     return est_limit;
 }
 
+void qtnorm_weights(vector<double> &weight_x, vector<double> &weight_y) {
+	vector<int> order_x;
+	vector<int> order_y;
+	bubble_asort(weight_x, order_x);
+	bubble_asort(weight_y, order_y);
+	double avg_xy;
+	for (int oi = 0; oi < order_x.size(); oi++) {
+		avg_xy = (weight_x[order_x[oi]] + weight_y[order_y[oi]]) / 2.0;
+		weight_x[order_x[oi]] = avg_xy;
+		weight_y[order_y[oi]] = avg_xy;
+	}
+}
+
 void one_tau_analysis(vector<double> &vec_x, vector<double> &vec_y, double &logp, double &tau, double &estimate, double &pvalue, char &cor_dir, fdata &data_tmp) {
     int n = 0;
     int len_x = vec_x.size();
@@ -793,8 +936,27 @@ void one_tau_analysis(vector<double> &vec_x, vector<double> &vec_y, double &logp
         vec_rank_rev(vec_x, data_tmp.rank_x);
         vec_rank_rev(vec_y, data_tmp.rank_y);
         vector<double> data_weight_x, data_weight_y;
-        cal_pdf(vec_x, data_weight_x);
-        cal_pdf(vec_y, data_weight_y);
+        //cal_pdf(vec_x, data_weight_x);
+        //cal_pdf(vec_y, data_weight_y);
+        cal_weights_ori_sep(vec_x, data_weight_x, data_tmp.sep_point);
+        cal_weights_ori(vec_y, data_weight_y);
+		qtnorm_weights(data_weight_x, data_weight_y);
+        merge_weights(data_weight_x, data_weight_y, data_tmp.weights);
+        //vector<double> weights;
+        //data_tmp.weights = data_tmp.weight_x;
+        //merge_weights(data_tmp.weight_x, data_tmp.weight_y, data_tmp.weights);
+        //if (logp == 0.8) {
+        //    print_datas(vec_x, vec_y, rank_x, rank_y, weight_x, weight_y, weights);
+        //}
+    }
+    else if (wt_method == "10") {
+        //cal_weight_ranks(vec_x, pp, data_tmp.weights, data_tmp.rank_x);
+        //cal_weight_ranks(vec_y, pp, data_tmp.weight_y, data_tmp.rank_y);
+        vec_rank_rev(vec_x, data_tmp.rank_x);
+        vec_rank_rev(vec_y, data_tmp.rank_y);
+        vector<double> data_weight_x, data_weight_y;
+        cal_rpdf(vec_x, data_weight_x);
+        cal_rpdf(vec_y, data_weight_y);
         merge_weights(data_weight_x, data_weight_y, data_tmp.weights);
         //vector<double> weights;
         //data_tmp.weights = data_tmp.weight_x;
@@ -857,7 +1019,14 @@ void one_tau_analysis(vector<double> &vec_x, vector<double> &vec_y, double &logp
         estimate = 3.0 * tau * limit;
     }
     else {
-        tau = wtau2(data_tmp.rank_x, data_tmp.rank_y, data_tmp.weights);
+        int min_rank = 0;
+        for (int i = 0; i < vec_x.size(); i++) {
+            if (vec_x[i] >= data_tmp.min_jindex) {
+                min_rank++;
+            }
+        }
+        cout << "data_tmp.min_jindex: " << data_tmp.min_jindex << ", min_rank: " << min_rank << ", vec_len: " << vec_x.size() << endl;
+        tau = wtau2(data_tmp.rank_x, data_tmp.rank_y, data_tmp.weights, min_rank);
         estimate = 1.5 * tau * limit * sqrt(n);
     }
     if (estimate >= 0) {
@@ -944,7 +1113,10 @@ void performe_threading() {
     }
     vector<thread> threads;
     for (unsigned int thread_i = 0; thread_i < gset_indexs.size(); thread_i++) {
+        thread t1(performe_wrktf_analysis, &(gset_indexs[thread_i]));
+        threads.push_back(move(t1));
         //vector<int> index_sect;
+        /*
         if (auto_p) {
             thread t1(performe_wrktf_analysis_auto_p, &(gset_indexs[thread_i]));
             threads.push_back(move(t1));
@@ -953,6 +1125,7 @@ void performe_threading() {
             thread t1(performe_wrktf_analysis, &(gset_indexs[thread_i]));
             threads.push_back(move(t1));
         }
+        */
         //t1.join();
         //threads.push_back(move(t1));
         //threads[0]->join();
@@ -968,12 +1141,17 @@ void performe_wrktf_analysis(vector<string> *index_sect) {
     //cout << "gene-set\tpp\tset_dir\tlist_dir\ttau\testimate\tpvalue" << endl;
     //vector<map<string, double>>::iterator gsv_riter;
     //map<string, double>::iterator rkm_riter;
+    //default_random_engine generator(random_seed);
+    mt19937 generator(random_seed);
+    uniform_real_distribution<double> puf_distribution(0.0, 1.0);
+    //uniform_real_distribution<double> puf_distribution(0.0, 1.0);
     for (int ii = 0; ii < index_sect->size(); ii++) {
         string gset_name = index_sect->at(ii);
         //vector<double> vec_x;
         //vector<double> vec_y;
         fdata data_tmp;
-        overlap_set(grit_set[gset_name], rank_data, data_tmp.gnames, data_tmp.vec_x, data_tmp.vec_y);
+        //cout << "analysis: " << gset_name << endl;
+        overlap_set(grit_set[gset_name], rank_data, data_tmp.gnames, data_tmp.vec_x, data_tmp.vec_y, data_tmp.sep_point, data_tmp.min_jindex, generator, puf_distribution);
         int x_n = data_tmp.vec_x.size();
         if (x_n < 1) {
             continue;
@@ -1004,7 +1182,8 @@ void performe_wrktf_analysis(vector<string> *index_sect) {
             //if (pvalue < stat_best.pvalue) {
                 //stat_best.tf_name = tf_names[i];
                 stat_best.tf_name = gset_name;
-                stat_best.count_n = x_n;
+                stat_best.gnames = data_tmp.gnames;
+                stat_best.count_n = stat_best.gnames.size();
                 stat_best.logpp = logp;
                 //stat_best.set_dir = set_dir;
                 //stat_best.list_dir = list_dir;
@@ -1015,18 +1194,21 @@ void performe_wrktf_analysis(vector<string> *index_sect) {
                 stat_best.data = data_tmp;
             //}
         //}
-        thread_lock.lock();
-        result_stats.push_back(stat_best);
-        if (mute == false) {
-            cout << gset_name << "\t" << stat_best.count_n << "\t" << stat_best.cor_dir;
-            //cout << "\t" << stat_best.set_wt << "\t" << stat_best.list_wt;
-            cout << "\t" << stat_best.tau << "\t" << stat_best.estimate << "\t" << stat_best.pvalue << endl;
+        if (stat_best.count_n > 1) {
+            thread_lock.lock();
+            result_stats.push_back(stat_best);
+            if (mute == false) {
+                cout << gset_name << "\t" << stat_best.count_n << "\t" << stat_best.cor_dir;
+                //cout << "\t" << stat_best.set_wt << "\t" << stat_best.list_wt;
+                cout << "\t" << stat_best.tau << "\t" << stat_best.estimate << "\t" << stat_best.pvalue << endl;
+            }
+            //cout << tf_names[i] << "\t" << pp << "\t" << tau << "\t" << estimate << "\t" << pvalue << endl;
+            thread_lock.unlock();
         }
-        //cout << tf_names[i] << "\t" << pp << "\t" << tau << "\t" << estimate << "\t" << pvalue << endl;
-        thread_lock.unlock();
     }
 }
 
+/*
 void performe_wrktf_analysis_auto_p(vector<string> *index_sect) {
     //cout << "gene-set\tpp\tset_dir\tlist_dir\ttau\testimate\tpvalue" << endl;
     //vector<map<string, double>>::iterator gsv_riter;
@@ -1036,7 +1218,7 @@ void performe_wrktf_analysis_auto_p(vector<string> *index_sect) {
         //vector<double> vec_x;
         //vector<double> vec_y;
         fdata data_tmp;
-        overlap_set(grit_set[gset_name], rank_data, data_tmp.gnames, data_tmp.vec_x, data_tmp.vec_y);
+        overlap_set(grit_set[gset_name], rank_data, data_tmp.gnames, data_tmp.vec_x, data_tmp.vec_y, data_tmp.sep_point);
         int x_n = data_tmp.vec_x.size();
         if (x_n < 1) {
             continue;
@@ -1078,16 +1260,30 @@ void performe_wrktf_analysis_auto_p(vector<string> *index_sect) {
                 stat_best.data = data_tmp;
             }
         }
-        thread_lock.lock();
-        result_stats.push_back(stat_best);
-        if (mute == false) {
-            cout << gset_name << "\t" << stat_best.count_n << "\t" << stat_best.cor_dir;
-            //cout << "\t" << stat_best.set_wt << "\t" << stat_best.list_wt;
-            cout << "\t" << stat_best.tau << "\t" << stat_best.estimate << "\t" << stat_best.pvalue << endl;
+        if (stat_best.count_n > 1) {
+            thread_lock.lock();
+            result_stats.push_back(stat_best);
+            if (mute == false) {
+                cout << gset_name << "\t" << stat_best.count_n << "\t" << stat_best.cor_dir;
+                //cout << "\t" << stat_best.set_wt << "\t" << stat_best.list_wt;
+                cout << "\t" << stat_best.tau << "\t" << stat_best.estimate << "\t" << stat_best.pvalue << endl;
+            }
+            //cout << tf_names[i] << "\t" << pp << "\t" << tau << "\t" << estimate << "\t" << pvalue << endl;
+            thread_lock.unlock();
         }
-        //cout << tf_names[i] << "\t" << pp << "\t" << tau << "\t" << estimate << "\t" << pvalue << endl;
-        thread_lock.unlock();
     }
+}
+*/
+
+string pack_string(vector<string> str_vec) {
+    if (str_vec.size() == 0) {
+        return("");
+    }
+    string strs_pack = str_vec[0];
+    for (int si=1; si<str_vec.size(); si++) {
+        strs_pack += "; " + str_vec[si];
+    }
+    return(strs_pack);
 }
 
 void save_result(string output_file) {
@@ -1103,13 +1299,18 @@ void save_result(string output_file) {
             result_stats[hi].fdr = 1.0;
         }
     }
-    sort(result_stats.begin(), result_stats.end(), stat_less_fdr);
+    for (int hi = 1; hi < result_stats.size(); ++hi) {
+        if (result_stats[hi].fdr < result_stats[hi - 1].fdr) {
+            result_stats[hi].fdr = result_stats[hi - 1].fdr;
+        }
+    }
+    //sort(result_stats.begin(), result_stats.end(), stat_less_fdr);
     ofstream file_writer;
     //string stat_file = dir + "/" + session + ".stat.txt";
     string stat_file = output_file;
     file_writer.open(output_file.c_str(), ios::out);
     if (!file_writer) mcf_die("Sorry, couldn't open " + stat_file);
-    file_writer << "Gene-set\tCount_N\tCor_dir\tTau\tEstimate\tP-value\tFDR" << endl;
+    file_writer << "Gene-set\tCount_N\tCor_dir\tTau\tEstimate\tP-value\tFDR\tTargets" << endl;
     //cout << "tf\tpp\ttau\testimate\tpvalue\tfdr" << endl;
     //sort(result_stats.begin(), result_stats.end(), stat_less_fdr);
     for (int ri = 0; ri < result_stats.size(); ++ri) {
@@ -1117,7 +1318,9 @@ void save_result(string output_file) {
         file_writer << "\t" << result_stats[ri].cor_dir;
         //file_writer << "\t" << result_stats[ri].set_wt << "\t" << result_stats[ri].list_wt;
         file_writer << "\t" << result_stats[ri].tau << "\t";
-        file_writer << result_stats[ri].estimate << "\t" << result_stats[ri].pvalue << "\t" << result_stats[ri].fdr << endl;
+        file_writer << result_stats[ri].estimate << "\t" << result_stats[ri].pvalue << "\t" << result_stats[ri].fdr << "\t";
+        string target_str = pack_string(result_stats[ri].gnames);
+        file_writer << target_str << endl;
     }
     file_writer.close();
 }
@@ -1226,21 +1429,87 @@ void print_result() {
     }
 }
 
-void overlap_set(map<string, double> &map_x, map<string, double> &map_y, vector<string> &gnames, vector<double> &vec_x, vector<double> &vec_y) {
+void overlap_set(map<string, double> &map_x, map<string, double> &map_y, vector<string> &gnames, vector<double> &vec_x, vector<double> &vec_y, int &sep_point, double &min_jindex_rt, mt19937 &generator, uniform_real_distribution<double> &puf_distribution) {
     gnames.clear();
     vec_x.clear();
     vec_y.clear();
     map<string, double>::iterator mp_riter_x;
     map<string, double>::iterator mp_riter_y;
-    for (mp_riter_x = map_x.begin(); mp_riter_x != map_x.end(); mp_riter_x++) {
-        for (mp_riter_y = map_y.begin(); mp_riter_y != map_y.end(); mp_riter_y++) {
+    vector<map<string, double>::iterator> iter_ys_nfound;
+    //vector<map<string, double>::iterator> iter_xs_nfound;
+    for (mp_riter_y = map_y.begin(); mp_riter_y != map_y.end(); mp_riter_y++) {
+        bool found_match = false;
+        for (mp_riter_x = map_x.begin(); mp_riter_x != map_x.end(); mp_riter_x++) {
             if (mp_riter_x->first == mp_riter_y->first) {
                 gnames.push_back(mp_riter_x->first);
                 vec_x.push_back(mp_riter_x->second);
                 vec_y.push_back(mp_riter_y->second);
+                found_match = true;
+                break;
+            }
+        }
+        if (!found_match) {
+          iter_ys_nfound.push_back(mp_riter_y);
+          //iter_xs_nfound.push_back(mp_riter_x);
+        }
+    }
+    sep_point = gnames.size();
+    vector<int> int_pool;
+    for (int iti=0; iti<iter_ys_nfound.size(); iti++) {
+      int_pool.push_back(iti);
+    }
+    std::shuffle(int_pool.begin(), int_pool.end(), generator);
+    int x_n = sep_point;
+    if (x_n > iter_ys_nfound.size()) {
+        x_n = iter_ys_nfound.size();
+    }
+    double min_jindex = -1.0;
+    double max_jindex = -1.0;
+    for (auto it_x = vec_x.begin(); it_x != vec_x.end(); it_x++) {
+        if (min_jindex == -1.0) {
+            min_jindex = *it_x;
+            max_jindex = *it_x;
+        } else {
+            if (min_jindex > *it_x) {
+                min_jindex = *it_x;
+            }
+            if (max_jindex < *it_x) {
+                max_jindex = *it_x;
             }
         }
     }
+    min_jindex_rt = min_jindex;
+    double random_range = max_jindex - min_jindex;
+    if (random_range > min_jindex) {
+        random_range = min_jindex;
+    }
+    for (int xi=0; xi<x_n; xi++) {
+        double random_num = min_jindex - (puf_distribution(generator) * random_range);
+        vec_x.push_back(random_num);
+        double jindex_tmp = iter_ys_nfound[int_pool[xi]]->second;
+        vec_y.push_back(jindex_tmp);
+    }
+    /*
+    for (mp_riter_y = map_y.begin(); mp_riter_y != map_y.end(); mp_riter_y++) {
+        bool in_names = false;
+        for (auto it_n = gnames.begin(); it_n != gnames.end(); it_n++) {
+            if (mp_riter_y->first == *it_n) {
+                in_names = true;
+                break;
+            }
+        }
+        if (!in_names) {
+            //gnames.push_back(mp_riter_y->first);
+            //vec_x.push_back(mp_riter_x->second);
+            //double random_num = min_jindex - ((double)rand() / (RAND_MAX + 1.0) * random_range);
+            double random_num = min_jindex - (puf_distribution(generator) * random_range);
+            //cout << random_num << endl;
+            vec_x.push_back(random_num);
+            vec_y.push_back(mp_riter_y->second);
+            //gnames.push_back(mp_riter_y->first);
+        }
+    }
+    */
 }
 
 void read_grit_dataset_bed(string grit_file_bed) {
@@ -1294,6 +1563,17 @@ void read_grit_dataset_bed(string grit_file_bed) {
     } else if (adj_method[0] == '3') {
         grit_set_rev();
     }
+    build_gene_pool();
+}
+
+void build_gene_pool() {
+    map<string, map<string, double>>::iterator mmp_riter_x;
+    for (mmp_riter_x = grit_set.begin(); mmp_riter_x != grit_set.end(); mmp_riter_x++) {
+        map<string, double>::iterator mp_riter_x;
+        for (mp_riter_x = mmp_riter_x->second.begin(); mp_riter_x != mmp_riter_x->second.end(); mp_riter_x++) {
+            gene_pool.insert(mp_riter_x->first);
+        }
+    }
 }
 
 void grit_set_abs() {
@@ -1340,7 +1620,8 @@ void read_rank_data(string rank_file) {
         //cout<<tmp_str<<", 2"<<endl;
         if (tmp_vec.size() < 2 || tmp_vec[0] == "" || tmp_vec[1] == "") {
 		    cout << "wrong line: " + tmp_str << endl;
-            exit(1);
+            continue;
+            //exit(1);
 	    }
         else {
             //cout << tmp_vec[0] << endl;
@@ -1356,6 +1637,19 @@ void read_rank_data(string rank_file) {
         grit_list_abs();
     } else if (adj_method[1] == '3') {
         grit_list_rev();
+    }
+    rf_gene_list();
+}
+
+void rf_gene_list() {
+    map<string, double>::iterator mp_riter_x;
+    for (mp_riter_x = rank_data.begin(); mp_riter_x != rank_data.end();) {
+        //std::cout << *it << " ";
+        if (gene_pool.find(mp_riter_x->first) == gene_pool.end()) {
+            mp_riter_x = rank_data.erase(mp_riter_x);
+        } else {
+            mp_riter_x++;
+        }
     }
 }
 
@@ -1421,7 +1715,7 @@ double tau0(vector<int>& rank_x, vector<int>& rank_y) {
     return tau;
 }
 
-double wtau2(vector<int> &rank_x, vector<int> &rank_y, vector<double> &weights) {   
+double wtau2(vector<int> &rank_x, vector<int> &rank_y, vector<double> &weights, int &min_rank) {   
     int n = 0;
     int len_x = rank_x.size();
     int len_y = rank_y.size();
@@ -1443,7 +1737,13 @@ double wtau2(vector<int> &rank_x, vector<int> &rank_y, vector<double> &weights) 
             float vi = weights[r_order[i]];
             float vj = weights[r_order[j]];
             tot += vi * vj;
-            tsgn += vi * vj * sgn(rank_x[r_order[i]] - rank_x[r_order[j]]) * sgn(rank_y[r_order[i]] - rank_y[r_order[j]]);
+            int sgn_x = 0;
+            if (rank_x[r_order[i]] > min_rank && rank_x[r_order[j]] > min_rank) {
+                sgn_x = 0;
+            } else {
+                sgn_x = sgn(rank_x[r_order[i]] - rank_x[r_order[j]]);
+            }
+            tsgn += vi * vj * sgn_x * sgn(rank_y[r_order[i]] - rank_y[r_order[j]]);
         }
     }
     double tau = 0.0;
@@ -1554,13 +1854,13 @@ void bubble_asort(vector<int> &nums, vector<int> &order) {
         order.push_back(i);
     }
 	for (int i = 0; i < order.size() - 1; i++) {
-		for (int j = 0; j < order.size() - 1 - i; j++) {
-			if (nums[order[j]] > nums[order[j + 1]]) {
-				temp = order[j];
-				order[j] = order[j + 1];
-				order[j + 1] = temp;
-			}
-		}
+        for (int j = 0; j < order.size() - 1 - i; j++) {
+            if (nums[order[j]] > nums[order[j + 1]]) {
+                temp = order[j];
+                order[j] = order[j + 1];
+                order[j + 1] = temp;
+            }
+        }
 	}
 }
 
@@ -1571,13 +1871,13 @@ void bubble_asort_rev(vector<int> &nums, vector<int> &order) {
         order.push_back(i);
     }
 	for (int i = 0; i < order.size() - 1; i++) {
-		for (int j = 0; j < order.size() - 1 - i; j++) {
-			if (nums[order[j]] < nums[order[j + 1]]) {
-				temp = order[j];
-				order[j] = order[j + 1];
-				order[j + 1] = temp;
-			}
-		}
+        for (int j = 0; j < order.size() - 1 - i; j++) {
+            if (nums[order[j]] < nums[order[j + 1]]) {
+                temp = order[j];
+                order[j] = order[j + 1];
+                order[j + 1] = temp;
+            }
+        }
 	}
 }
 
@@ -1589,12 +1889,12 @@ void bubble_asort(vector<double> &nums, vector<int> &order) {
     }
 	for (int i = 0; i < order.size() - 1; i++) {
 		for (int j = 0; j < order.size() - 1 - i; j++) {
-			if (nums[order[j]] > nums[order[j + 1]]) {
-				temp = order[j];
-				order[j] = order[j + 1];
-				order[j + 1] = temp;
-			}
-		}
+            if (nums[order[j]] > nums[order[j + 1]]) {
+                temp = order[j];
+                order[j] = order[j + 1];
+                order[j + 1] = temp;
+            }
+        }
 	}
 }
 
@@ -1605,13 +1905,13 @@ void bubble_asort_rev(vector<double> &nums, vector<int> &order) {
         order.push_back(i);
     }
 	for (int i = 0; i < order.size() - 1; i++) {
-		for (int j = 0; j < order.size() - 1 - i; j++) {
-			if (nums[order[j]] < nums[order[j + 1]]) {
-				temp = order[j];
-				order[j] = order[j + 1];
-				order[j + 1] = temp;
-			}
-		}
+        for (int j = 0; j < order.size() - 1 - i; j++) {
+            if (nums[order[j]] < nums[order[j + 1]]) {
+                temp = order[j];
+                order[j] = order[j + 1];
+                order[j + 1] = temp;
+            }
+        }
 	}
 }
 
@@ -1628,12 +1928,12 @@ void bubble_lexsort(vector<int> &vec_x, vector<int> &vec_y, vector<int> &order) 
         order.push_back(i);
     }
 	for (int i = 0; i < order.size() - 1; i++) {
-		for (int j = 0; j < order.size() - 1 - i; j++) {
-			if (vec_x[order[j]] > vec_x[order[j + 1]]) {
-				temp = order[j];
-				order[j] = order[j + 1];
-				order[j + 1] = temp;
-			}
+        for (int j = 0; j < order.size() - 1 - i; j++) {
+            if (vec_x[order[j]] > vec_x[order[j + 1]]) {
+                temp = order[j];
+                order[j] = order[j + 1];
+                order[j + 1] = temp;
+            }
             else if (vec_x[order[j]] == vec_x[order[j + 1]]) {
                 if (vec_y[order[j]] > vec_y[order[j + 1]]) {
                     temp = order[j];
@@ -1641,7 +1941,7 @@ void bubble_lexsort(vector<int> &vec_x, vector<int> &vec_y, vector<int> &order) 
                     order[j + 1] = temp;
                 }
             }
-		}
+        }
 	}
 }
 
