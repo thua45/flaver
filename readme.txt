@@ -4,7 +4,7 @@ Description
 Testing the significance of ranked gene-sets in genome-wide transcriptome profiling data using weighted rank correlation statistics
 
 Homepage
-http://www.thua45.cn/grit-2.0
+http://www.thua45.cn/flaver-2.0
 
 Release
 Binary-2.0	Windows	01/12/2025
