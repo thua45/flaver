@@ -7,7 +7,7 @@ Homepage
 http://www.thua45.cn/grit-2.0
 
 Release
-Binary-2.0	Windows	01/12/2025	http://www.thua45.cn/grit-2.0/programs/flaver-2.0/flaver-2.0.zip
+Binary-2.0	Windows	01/12/2025
 Source code	1.0.31	08/18/2024
 Source code	1.0.2024	06/18/2023
 Source code	1.0.1	08/31/2022
